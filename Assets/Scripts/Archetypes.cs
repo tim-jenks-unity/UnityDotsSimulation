@@ -12,7 +12,9 @@ namespace TJ
         static Archetypes()
         {
             BaseBodyArchetype = World.DefaultGameObjectInjectionWorld.EntityManager.CreateArchetype(
-                typeof(VelocityVector),
+                typeof(VelocityComponent),
+                typeof(MassComponent),
+                typeof(ForceComponent),
                 
                 typeof(LocalToWorld),
                 typeof(WorldToLocal),

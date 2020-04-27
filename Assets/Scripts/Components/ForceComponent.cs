@@ -3,7 +3,7 @@ using Unity.Mathematics;
 
 namespace TJ.Components
 {
-    public struct VelocityVector : IComponentData
+    public struct ForceComponent : IComponentData
     {
         public float3 Value;
     }

@@ -71,11 +71,11 @@ MonoBehaviour:
     y: 1
     z: 0
   Velocity: 10
-  ZoomVelocity: 10
+  ZoomVelocity: 50
   Units: 1
   NearFarPlane:
     x: 0.01
-    y: 1000
+    y: 15000
   MinMaxDistance:
     x: 1
     y: 1000
