@@ -17,6 +17,9 @@ namespace TJ.Systems
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     public class NBodyPartitionedSystem : JobComponentSystem
     {
+        private const int CollisionBucketSize = 10;
+        private const int NBodyBucketSize = 30;
+        
         [BurstCompile]
         struct CollisionJob : IJobNativeMultiHashMapVisitKeyAllValues<int3, int>
         {
@@ -64,10 +67,89 @@ namespace TJ.Systems
                 }
             }
         }
+        
+        [BurstCompile]
+        struct PartitionAverageMasses : IJobNativeMultiHashMapVisitKeyAllValues<int3, int>
+        {
+            [ReadOnly] public NativeArray<bool> DestroyedEntities;
+            [ReadOnly] public NativeArray<float> MassCopies;
+            [ReadOnly] public NativeArray<double3> PositionCopies;
+            public NativeArray<float3> ForceCopies;
 
+            public void Execute(int3 key, NativeArray<int> scratchValues, int count)
+            {
+                float totalMass = 0f;
+                int counted = 0;
+                for (int j = 0; j < count; ++j)
+                {
+                    var jIdx = scratchValues[j];
+                    if (!DestroyedEntities[jIdx])
+                    {
+                        totalMass += MassCopies[jIdx];
+                        ++counted;
+                    }
+                }
+
+                var theirGrid = key;
+                var theirMass = totalMass / counted;
+                var theirPosition = (key * NBodyBucketSize);
+
+                var numEntities = PositionCopies.Length;
+                for (int i = 0; i < numEntities; ++i)
+                {
+                    var myPosition = PositionCopies[i];
+                    var myGrid = (int3) math.floor(myPosition / NBodyBucketSize);
+                    if (!(myGrid.Equals(theirGrid)))
+                    {
+                        var myMass = MassCopies[i];
+                        var delta = theirPosition - myPosition;
+                        var distSq = math.distancesq(myPosition, theirPosition);
+                        var f = (myMass * theirMass) / (distSq + 10f);
+                        ForceCopies[i] += (float3) (f * delta / math.sqrt(distSq)); // TODO: get rid of sqrt?
+                    }
+                }
+            }
+        }
+
+        [BurstCompile]
+        struct ApplyGriddedNBodyForces : IJobNativeMultiHashMapVisitKeyAllValues<int3, int>
+        {
+            [ReadOnly] public NativeArray<bool> DestroyedEntities;
+            [ReadOnly] public NativeArray<float> MassCopies;
+            [ReadOnly] public NativeArray<double3> PositionCopies;
+            public NativeArray<float3> Forces;
+
+            public void Execute(int3 key, NativeArray<int> scratchValues, int count)
+            {
+                for (int j = 0; j < count; ++j)
+                {
+                    var jIdx = scratchValues[j];
+                    var myPosition = PositionCopies[jIdx];
+                    if (!DestroyedEntities[jIdx])
+                    {
+                        for (int i = 0; i < count; ++i)
+                        {
+                            var iIdx = scratchValues[i];
+                            if (i != j && !DestroyedEntities[iIdx])
+                            {
+                                var theirPosition = PositionCopies[iIdx];
+                                var theirMass = MassCopies[iIdx];
+                                var myMass = MassCopies[jIdx];
+                                var delta = theirPosition - myPosition;
+                                var distSq = math.distancesq(myPosition, theirPosition);
+                                var f = (myMass * theirMass) / (distSq + 10f);
+                                Forces[jIdx] += (float3)(f * delta / math.sqrt(distSq)); // TODO: get rid of sqrt?
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
         private EntityQuery m_EntityQuery;
         private EndSimulationEntityCommandBufferSystem m_EndSimulationEntityCommandBufferSystem;
-        
+
+            
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
             float dt = UnityEngine.Time.deltaTime;
@@ -78,21 +160,26 @@ namespace TJ.Systems
             var destroyedEntities = new NativeArray<bool>(allEntities.Length, Allocator.TempJob);
             var scaleCopies = new NativeArray<float>(allEntities.Length, Allocator.TempJob);
             var massCopies = new NativeArray<float>(allEntities.Length, Allocator.TempJob);
+            var forceCopies = new NativeArray<float3>(allEntities.Length, Allocator.TempJob);
             var positionCopies = new NativeArray<double3>(allEntities.Length, Allocator.TempJob);
-            var partitions = new NativeMultiHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
+            var collisionPartitions = new NativeMultiHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
+            var nBodyPartitions = new NativeMultiHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
            
-            var copyMassScaleTranslationJob = Entities.ForEach((Entity e, int entityInQueryIndex, in MassComponent myMass, in Scale myScale, in PositionComponent myPosition) =>
+            var copyMassScaleTranslationJob = Entities.ForEach((Entity e, int entityInQueryIndex, in MassComponent myMass, in ForceComponent myForce, in Scale myScale, in PositionComponent myPosition) =>
             {
                 scaleCopies[entityInQueryIndex] = myScale.Value;
                 massCopies[entityInQueryIndex] = myMass.Value;
+                forceCopies[entityInQueryIndex] = myForce.Value;
                 positionCopies[entityInQueryIndex] = myPosition.Value;
             }).WithName("CopyMassScaleTranslation").Schedule(inputDeps);
 
-            var parallelPartitionWriter = partitions.AsParallelWriter();
+            var parallelCollisionPartitionWriter = collisionPartitions.AsParallelWriter();
+            var parallelnBodyPartitionsPartitionWriter = nBodyPartitions.AsParallelWriter();
             var determinePartitionsJob = Entities.ForEach((Entity e, int entityInQueryIndex, in PositionComponent myPosition) =>
             {
                 var pos = myPosition.Value;
-                parallelPartitionWriter.Add((int3)pos/10, entityInQueryIndex);
+                parallelCollisionPartitionWriter.Add((int3)math.floor(pos / CollisionBucketSize), entityInQueryIndex);
+                parallelnBodyPartitionsPartitionWriter.Add((int3)math.floor(pos / CollisionBucketSize), entityInQueryIndex);
             }).WithName("DeterminePartitions").Schedule(inputDeps);
 
             var initalSteps = JobHandle.CombineDependencies(copyMassScaleTranslationJob, determinePartitionsJob);
@@ -105,7 +192,7 @@ namespace TJ.Systems
                 MassCopies = massCopies,
                 PositionCopies = positionCopies,
                 ScaleCopies = scaleCopies,
-            }.Schedule(partitions, 1, initalSteps);
+            }.Schedule(collisionPartitions, 1, initalSteps);
             m_EndSimulationEntityCommandBufferSystem.AddJobHandleForProducer(processCollisionsNSquaredJob);
 
             var zeroForces = Entities.
@@ -114,51 +201,38 @@ namespace TJ.Systems
                 .WithBurst()
                 .Schedule(inputDeps);
 
-            var waitZeroAndCollisionJobs = JobHandle.CombineDependencies(zeroForces, processCollisionsNSquaredJob); 
+            var waitZeroAndCollisionJobs = JobHandle.CombineDependencies(zeroForces, processCollisionsNSquaredJob);
 
+            var calculatePartitionMasses = new PartitionAverageMasses
+            {
+                DestroyedEntities = destroyedEntities, 
+                MassCopies = massCopies,
+                ForceCopies = forceCopies,
+                PositionCopies = positionCopies
+            }.Schedule(nBodyPartitions, 
+                1, waitZeroAndCollisionJobs);
+            
+            var aggregateForcesNSquaredJob = new ApplyGriddedNBodyForces
+            {
+                DestroyedEntities = destroyedEntities,
+                MassCopies = massCopies,
+                PositionCopies = positionCopies,
+                Forces = forceCopies
+            }.Schedule(nBodyPartitions, 1, calculatePartitionMasses);
+            
             var updateScaleFromMassJob = Entities.
-                ForEach((Entity e, int entityInQueryIndex, ref Scale scale, ref MassComponent myMass) =>
+                ForEach((Entity e, int entityInQueryIndex, ref Scale scale, ref MassComponent myMass, ref ForceComponent myForce) =>
                 {
+                    myForce.Value = forceCopies[entityInQueryIndex];
                     myMass.Value = massCopies[entityInQueryIndex];
                     var volume = myMass.Value / 4f;
                     scale.Value = math.pow(volume * 0.75f * (1 / math.PI), 1/3f);
                 })
                 .WithName("UpdateScaleFromMassJob")
                 .WithReadOnly(massCopies)
+                .WithReadOnly(forceCopies)
                 .WithBurst()
-                .Schedule(waitZeroAndCollisionJobs);
-            
-            var aggregateForcesNSquaredJob = Entities.
-                ForEach((Entity e, int entityInQueryIndex, ref ForceComponent force, in PositionComponent myPosition, in MassComponent myMass) =>
-                {
-                    var pos = myPosition.Value;
-                    var myPartition = (int3)pos/10;
-                    if (!destroyedEntities[entityInQueryIndex])
-                    {
-                        for (int i = 0; i < allEntities.Length; ++i)
-                        {
-                            if (!destroyedEntities[i])
-                            {
-                                var other = allEntities[i];
-                                if (other != e)
-                                {
-                                    var theirPosition = positionCopies[i];
-                                    var theirMass = massCopies[i];
-                                    var delta = theirPosition - myPosition.Value;
-                                    var distSq = math.distancesq(myPosition.Value, theirPosition);
-                                    var f = (myMass.Value * theirMass) / (distSq + 10f);
-                                    force.Value += (float3)(f * delta / math.sqrt(distSq)); // TODO: get rid of sqrt?
-                                }
-                            }
-                        }
-                    }
-                })
-                .WithName("AggregateForcesNSquared")
-                .WithBurst()
-                .WithReadOnly(massCopies)
-                .WithReadOnly(positionCopies)
-                .WithReadOnly(allEntities)
-                .Schedule(waitZeroAndCollisionJobs);
+                .Schedule(aggregateForcesNSquaredJob);
 
             var cameraLookAt = CameraController.Instance.Data.LookAtPosition;
             var simulateJob = Entities.
@@ -179,8 +253,9 @@ namespace TJ.Systems
             disposalJob = JobHandle.CombineDependencies(disposalJob, destroyedEntities.Dispose(aggregateForcesNSquaredJob));
             disposalJob = JobHandle.CombineDependencies(disposalJob, scaleCopies.Dispose(aggregateForcesNSquaredJob));
             disposalJob = JobHandle.CombineDependencies(disposalJob, massCopies.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, forceCopies.Dispose(aggregateForcesNSquaredJob));
             disposalJob = JobHandle.CombineDependencies(disposalJob, positionCopies.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, partitions.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, collisionPartitions.Dispose(aggregateForcesNSquaredJob));
             return JobHandle.CombineDependencies(disposalJob, simulateJob);
         }
 
