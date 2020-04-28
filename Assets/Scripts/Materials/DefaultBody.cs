@@ -32,37 +32,20 @@ namespace TJ.Materials
             };
             Bounds = Mesh.bounds.ToAABB();
 
-            var EntityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
+            var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
             
-/*            const int NumberOfBodies = 100;
+            const int NumberOfBodies = 5000;
             var random = new Unity.Mathematics.Random(UInt32.MaxValue);
-            var entities = EntityManager.CreateEntity(Archetypes.BaseBodyArchetype, NumberOfBodies, Allocator.Temp);
+            var entities = entityManager.CreateEntity(Archetypes.BaseBodyArchetype, NumberOfBodies, Allocator.Temp);
             for (int i = 0; i < entities.Length; ++i)
             {
                 var entity = entities[i];
-                EntityManager.SetSharedComponentData(entity, RenderMesh);
-                EntityManager.SetComponentData(entity, new Scale {Value = 1f});
-                EntityManager.SetComponentData(entity, new RenderBounds {Value = Bounds});
-                EntityManager.SetComponentData(entity, new BuiltinMaterialPropertyUnity_RenderingLayer
-                {
-                    Value = new uint4(1, 0, 0, 0)
-                });
-                EntityManager.SetComponentData(entity, new BuiltinMaterialPropertyUnity_WorldTransformParams
-                {
-                    Value = new float4(0, 0, 0, 1)
-                });
-                EntityManager.SetComponentData(entity, new BuiltinMaterialPropertyUnity_LightData
-                {
-                    Value = new float4(0, 0, 1, 0)
-                });
-                var translation = new Translation {Value = ((random.NextFloat3() * 2f) - 1f) * 100f};
-                EntityManager.SetComponentData(entity, translation);
-                EntityManager.SetComponentData(entity, new VelocityComponent { Value = float3.zero } );
-                EntityManager.SetComponentData(entity, new MassComponent { Value = 100f } );
+                var position = (double3)math.normalize((random.NextFloat3() * 2f) - 1f) * 25f;
+                CreateBody(entityManager, entity, position, 0.25f);
             }
-            entities.Dispose(); */
+            entities.Dispose();
 
-            TestBed();
+            //TestBed();
         }
 
         private void TestBed()
@@ -73,16 +56,15 @@ namespace TJ.Materials
             var entityC = entityManager.CreateEntity(Archetypes.BaseBodyArchetype);
             var entityD = entityManager.CreateEntity(Archetypes.BaseBodyArchetype);
             
-            CreateBody(entityManager, entityA, new float3(10, 0, 0), 100f);
-            CreateBody(entityManager, entityB, new float3(-10, 0, 0), 100f);
-            CreateBody(entityManager, entityC, new float3(-10, 0, -10), 100f);
-            CreateBody(entityManager, entityD, new float3(-10, 0, 20), 100f);
+            CreateBody(entityManager, entityA, new double3(10, 0, 0), 100f);
+            CreateBody(entityManager, entityB, new double3(-10, 0, 0), 100f);
+            CreateBody(entityManager, entityC, new double3(-10, 0, -10), 100f);
+            CreateBody(entityManager, entityD, new double3(-10, 0, 20), 100f);
         }
 
-        private void CreateBody(EntityManager EntityManager, in Entity entity, in float3 position, in float mass)
+        private void CreateBody(EntityManager EntityManager, in Entity entity, in double3 initialposition, in float mass)
         {
             EntityManager.SetSharedComponentData(entity, RenderMesh);
-            EntityManager.SetComponentData(entity, new Scale {Value = 1f});
             EntityManager.SetComponentData(entity, new RenderBounds {Value = Bounds});
             EntityManager.SetComponentData(entity, new BuiltinMaterialPropertyUnity_RenderingLayer
             {
@@ -96,9 +78,9 @@ namespace TJ.Materials
             {
                 Value = new float4(0, 0, 1, 0)
             });
-            var translation = new Translation {Value = position};
-            EntityManager.SetComponentData(entity, translation);
-            EntityManager.SetComponentData(entity, new VelocityComponent {Value = float3.zero});
+            var position = new PositionComponent {Value = initialposition};
+            EntityManager.SetComponentData(entity, position);
+            EntityManager.SetComponentData(entity, new VelocityComponent { Value = (float3)math.normalize(position.Value)*5f });
             EntityManager.SetComponentData(entity, new MassComponent { Value = mass });
         }
     }

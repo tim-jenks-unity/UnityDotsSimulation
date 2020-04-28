@@ -62,7 +62,7 @@ MonoBehaviour:
     x: 0
     y: 0
     z: 0
-  Distance: 20
+  Distance: 200
   Forward:
     x: 1
     y: -1

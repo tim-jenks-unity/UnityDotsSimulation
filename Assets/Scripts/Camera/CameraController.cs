@@ -44,7 +44,7 @@ namespace TJ.Camera
         public double3 LookAtScaledWorldPosition;
         public double3 EyePosition;
         public double3 EyeScaledWorldPosition;
-        [Range(0.1f, 20f)] public float Distance;
+        [Range(0.1f, 5000f)] public float Distance;
         public float3 Forward;
         public float3 Up;
         [Range(0.1f, 50f)] public float Velocity;
@@ -103,7 +103,7 @@ namespace TJ.Camera
             MinMaxDistance = data.MinMaxDistance;
             NearFarPlane = data.NearFarPlane; 
             MainCameraObject.transform.rotation = quaternion.LookRotation(data.Forward, data.Up);
-            MainCameraObject.transform.position = -data.Forward * data.Distance;
+            MainCameraObject.transform.position = (-data.Forward * data.Distance);
             MainCamera.nearClipPlane = data.NearFarPlane.x;
             MainCamera.farClipPlane = data.NearFarPlane.y;
         }

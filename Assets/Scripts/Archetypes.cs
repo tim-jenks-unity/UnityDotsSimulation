@@ -15,7 +15,9 @@ namespace TJ
                 typeof(VelocityComponent),
                 typeof(MassComponent),
                 typeof(ForceComponent),
+                typeof(PositionComponent),
                 
+                // Follows standard URP & DOTS components
                 typeof(LocalToWorld),
                 typeof(WorldToLocal),
                 typeof(BuiltinMaterialPropertyUnity_RenderingLayer),
