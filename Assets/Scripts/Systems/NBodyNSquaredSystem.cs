@@ -9,12 +9,13 @@ using Unity.Transforms;
 namespace TJ.Systems
 {
     [UpdateInGroup(typeof(SimulationSystemGroup))]
-    public class NBodySystem : JobComponentSystem
+    public class NBodyNSquaredSystem : JobComponentSystem
     {
         private EntityQuery m_EntityQuery;
         private EndSimulationEntityCommandBufferSystem m_EndSimulationEntityCommandBufferSystem;
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
+            return inputDeps;
             float dt = UnityEngine.Time.deltaTime;
 
             var commandBuffer = m_EndSimulationEntityCommandBufferSystem.CreateCommandBuffer().ToConcurrent();
@@ -148,6 +149,7 @@ namespace TJ.Systems
 
         protected override void OnCreate()
         {
+            Enabled = false;
             m_EntityQuery = GetEntityQuery(typeof(MassComponent));
             m_EndSimulationEntityCommandBufferSystem = World.DefaultGameObjectInjectionWorld
                 .GetOrCreateSystem<EndSimulationEntityCommandBufferSystem>();

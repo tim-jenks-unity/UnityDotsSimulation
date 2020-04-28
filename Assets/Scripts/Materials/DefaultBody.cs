@@ -5,9 +5,7 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using Unity.Rendering;
-using Unity.Transforms;
 using UnityEngine;
-using Random = UnityEngine.Random;
 
 namespace TJ.Materials
 {
@@ -34,7 +32,7 @@ namespace TJ.Materials
 
             var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
             
-            const int NumberOfBodies = 5000;
+            const int NumberOfBodies = 10000;
             var random = new Unity.Mathematics.Random(UInt32.MaxValue);
             var entities = entityManager.CreateEntity(Archetypes.BaseBodyArchetype, NumberOfBodies, Allocator.Temp);
             for (int i = 0; i < entities.Length; ++i)
