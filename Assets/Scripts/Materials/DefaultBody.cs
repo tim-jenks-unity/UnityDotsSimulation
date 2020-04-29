@@ -32,13 +32,13 @@ namespace TJ.Materials
 
             var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
             
-            const int NumberOfBodies = 10000;
+            const int NumberOfBodies = 100000;
             var random = new Unity.Mathematics.Random(UInt32.MaxValue);
             var entities = entityManager.CreateEntity(Archetypes.BaseBodyArchetype, NumberOfBodies, Allocator.Temp);
             for (int i = 0; i < entities.Length; ++i)
             {
                 var entity = entities[i];
-                var position = (double3)math.normalize((random.NextFloat3() * 2f) - 1f) * 25f;
+                var position = (double3)math.normalize((random.NextFloat3() * 2f) - 1f) * 100f;
                 CreateBody(entityManager, entity, position, 0.25f);
             }
             entities.Dispose();
@@ -79,6 +79,7 @@ namespace TJ.Materials
             var position = new PositionComponent {Value = initialposition};
             EntityManager.SetComponentData(entity, position);
             EntityManager.SetComponentData(entity, new VelocityComponent { Value = (float3)math.normalize(position.Value)*5f });
+            //EntityManager.SetComponentData(entity, new VelocityComponent { Value = float3.zero });
             EntityManager.SetComponentData(entity, new MassComponent { Value = mass });
         }
     }
