@@ -175,14 +175,14 @@ namespace TJ.Systems
             
             var allEntities = m_EntityQuery.ToEntityArray(Allocator.TempJob);
             var destroyedEntities = new NativeArray<bool>(allEntities.Length, Allocator.TempJob);
-            var scaleCopies = new NativeArray<float>(allEntities.Length, Allocator.TempJob);
-            var massCopies = new NativeArray<float>(allEntities.Length, Allocator.TempJob);
+            var scaleCopies = new NativeArray<float>(allEntities.Length, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            var massCopies = new NativeArray<float>(allEntities.Length, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
             var forceCopies = new NativeArray<float3>(allEntities.Length, Allocator.TempJob);
-            var positionCopies = new NativeArray<double3>(allEntities.Length, Allocator.TempJob);
+            var positionCopies = new NativeArray<double3>(allEntities.Length, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
             
 
-            const int NumBuckets = 200;
-            const int IndexPerBucket = 200;
+            const int NumBuckets = 400;
+            const int IndexPerBucket = 4000;
             
             var gridToBucketIndex = new NativeHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
             var bucketIndices = new NativeArray<int>(NumBuckets * IndexPerBucket, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
@@ -220,7 +220,7 @@ namespace TJ.Systems
                 }
 
                 var distance = math.distance(min, max);
-                partitionSizes[BucketSizes] = (int)distance / 8;
+                partitionSizes[BucketSizes] = (int)distance / 15;
             }).WithName("CalculateMinMaxBounds").WithBurst().Schedule(copyMassScaleTranslationJob);
 
             var determinePartitionsJob = Job.WithCode(() =>
@@ -276,7 +276,7 @@ namespace TJ.Systems
                 ScaleCopies = scaleCopies,
                 Buckets = buckets,
                 BucketIndices = bucketIndices
-            }.Schedule(buckets.Length, 0, partitioningAndCopyingCompleteBarrier);
+            }.Schedule(buckets.Length, 1, partitioningAndCopyingCompleteBarrier);
             m_EndSimulationEntityCommandBufferSystem.AddJobHandleForProducer(processCollisionsNSquaredJob);
 
             var calculatePartitionMassesJob = new PartitionAverageMasses
@@ -285,9 +285,7 @@ namespace TJ.Systems
                 MassCopies = massCopies,
                 Buckets = buckets,
                 BucketIndices = bucketIndices
-            }.Schedule(buckets.Length, 0, processCollisionsNSquaredJob);
-
-            var massesAndCollisionsCompleteBarrier = calculatePartitionMassesJob;
+            }.Schedule(buckets.Length, 1, processCollisionsNSquaredJob);
             
             var aggregateForcesNSquaredJob = new ApplyGriddedNBodyForces
             {
@@ -297,7 +295,7 @@ namespace TJ.Systems
                 Forces = forceCopies,
                 Buckets = buckets,
                 BucketIndices = bucketIndices
-            }.Schedule(buckets.Length, 0, massesAndCollisionsCompleteBarrier);
+            }.Schedule(buckets.Length, 1, calculatePartitionMassesJob);
 
             var allPhysicsJobsCompleteBarrier = aggregateForcesNSquaredJob;
             
@@ -331,16 +329,16 @@ namespace TJ.Systems
                 .Schedule(updateScaleMassForceJob);
 
 
-            var disposalJob = allEntities.Dispose(simulateJob);
-            disposalJob = JobHandle.CombineDependencies(disposalJob, destroyedEntities.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, scaleCopies.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, massCopies.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, forceCopies.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, positionCopies.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, partitionSizes.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, bucketIndices.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, buckets.Dispose(simulateJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, gridToBucketIndex.Dispose(simulateJob));
+            var disposalJob = allEntities.Dispose(processCollisionsNSquaredJob);
+            disposalJob = JobHandle.CombineDependencies(disposalJob, destroyedEntities.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, scaleCopies.Dispose(processCollisionsNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, massCopies.Dispose(updateScaleMassForceJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, forceCopies.Dispose(updateScaleMassForceJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, positionCopies.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, partitionSizes.Dispose(determinePartitionsJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, bucketIndices.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, buckets.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, gridToBucketIndex.Dispose(determinePartitionsJob));
             return disposalJob;
         }
 
