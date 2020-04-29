@@ -17,8 +17,8 @@ namespace TJ.Systems
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     public class NBodyPartitionedSystem : JobComponentSystem
     {
-        private const int CollisionBucketSize = 10;
-        private const int NBodyBucketSize = 30;
+        private const int CollisionBucket = 0;
+        private const int NBodyBucket = 1;
         
         [BurstCompile]
         struct CollisionJob : IJobNativeMultiHashMapVisitKeyAllValues<int3, int>
@@ -73,8 +73,6 @@ namespace TJ.Systems
         {
             [ReadOnly] public NativeArray<bool> DestroyedEntities;
             [ReadOnly] public NativeArray<float> MassCopies;
-            [ReadOnly] public NativeArray<double3> PositionCopies;
-            public NativeArray<float3> ForceCopies;
 
             public void Execute(int3 key, NativeArray<int> scratchValues, int count)
             {
@@ -90,11 +88,7 @@ namespace TJ.Systems
                     }
                 }
 
-                var theirGrid = key;
-                var theirMass = totalMass / counted;
-                var theirPosition = (key * NBodyBucketSize);
-
-                var numEntities = PositionCopies.Length;
+/*                var numEntities = PositionCopies.Length;
                 for (int i = 0; i < numEntities; ++i)
                 {
                     var myPosition = PositionCopies[i];
@@ -107,7 +101,7 @@ namespace TJ.Systems
                         var f = (myMass * theirMass) / (distSq + 10f);
                         ForceCopies[i] += (float3) (f * delta / math.sqrt(distSq)); // TODO: get rid of sqrt?
                     }
-                }
+                } */
             }
         }
 
@@ -149,7 +143,6 @@ namespace TJ.Systems
         private EntityQuery m_EntityQuery;
         private EndSimulationEntityCommandBufferSystem m_EndSimulationEntityCommandBufferSystem;
 
-            
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
             float dt = UnityEngine.Time.deltaTime;
@@ -164,6 +157,7 @@ namespace TJ.Systems
             var positionCopies = new NativeArray<double3>(allEntities.Length, Allocator.TempJob);
             var collisionPartitions = new NativeMultiHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
             var nBodyPartitions = new NativeMultiHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
+            var partitionSizes = new NativeArray<int>(2, Allocator.TempJob);
            
             var copyMassScaleTranslationJob = Entities.ForEach((Entity e, int entityInQueryIndex, in MassComponent myMass, in ForceComponent myForce, in Scale myScale, in PositionComponent myPosition) =>
             {
@@ -173,16 +167,32 @@ namespace TJ.Systems
                 positionCopies[entityInQueryIndex] = myPosition.Value;
             }).WithName("CopyMassScaleTranslation").Schedule(inputDeps);
 
+            var calculatePartitionSizesJob = Job.WithCode(() =>
+            {
+                var min = new double3(double.MaxValue, double.MaxValue, double.MaxValue);
+                var max = new double3(double.MinValue, double.MinValue, double.MinValue);
+                for (int i = 0; i<positionCopies.Length; ++i)
+                {
+                    var pos = positionCopies[i];
+                    min = math.min(min, pos);
+                    max = math.max(max, pos);
+                }
+
+                var distance = math.distance(min, max);
+                partitionSizes[CollisionBucket] = (int)distance / 10;
+                partitionSizes[NBodyBucket] = (int)distance / 3;
+            }).WithName("CalculateMinMaxBounds").WithBurst().Schedule(copyMassScaleTranslationJob);
+
             var parallelCollisionPartitionWriter = collisionPartitions.AsParallelWriter();
             var parallelnBodyPartitionsPartitionWriter = nBodyPartitions.AsParallelWriter();
             var determinePartitionsJob = Entities.ForEach((Entity e, int entityInQueryIndex, in PositionComponent myPosition) =>
             {
                 var pos = myPosition.Value;
-                parallelCollisionPartitionWriter.Add((int3)math.floor(pos / CollisionBucketSize), entityInQueryIndex);
-                parallelnBodyPartitionsPartitionWriter.Add((int3)math.floor(pos / CollisionBucketSize), entityInQueryIndex);
-            }).WithName("DeterminePartitions").Schedule(inputDeps);
+                parallelCollisionPartitionWriter.Add((int3)math.floor(pos / partitionSizes[CollisionBucket]), entityInQueryIndex);
+                parallelnBodyPartitionsPartitionWriter.Add((int3)math.floor(pos / partitionSizes[NBodyBucket]), entityInQueryIndex);
+            }).WithName("DeterminePartitions").Schedule(calculatePartitionSizesJob);
 
-            var initalSteps = JobHandle.CombineDependencies(copyMassScaleTranslationJob, determinePartitionsJob);
+            var initalSteps = determinePartitionsJob;
                 
             var processCollisionsNSquaredJob = new CollisionJob
             {
@@ -206,9 +216,7 @@ namespace TJ.Systems
             var calculatePartitionMasses = new PartitionAverageMasses
             {
                 DestroyedEntities = destroyedEntities, 
-                MassCopies = massCopies,
-                ForceCopies = forceCopies,
-                PositionCopies = positionCopies
+                MassCopies = massCopies
             }.Schedule(nBodyPartitions, 
                 1, waitZeroAndCollisionJobs);
             
@@ -256,6 +264,8 @@ namespace TJ.Systems
             disposalJob = JobHandle.CombineDependencies(disposalJob, forceCopies.Dispose(aggregateForcesNSquaredJob));
             disposalJob = JobHandle.CombineDependencies(disposalJob, positionCopies.Dispose(aggregateForcesNSquaredJob));
             disposalJob = JobHandle.CombineDependencies(disposalJob, collisionPartitions.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, nBodyPartitions.Dispose(aggregateForcesNSquaredJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, partitionSizes.Dispose(aggregateForcesNSquaredJob));
             return JobHandle.CombineDependencies(disposalJob, simulateJob);
         }
 

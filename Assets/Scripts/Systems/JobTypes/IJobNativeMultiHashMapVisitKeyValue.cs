@@ -46,6 +46,7 @@ namespace TJ.Systems.JobTypes
                 while (true)
                 {
                     TKey lastKey = default;
+                    bool firstKey = true;
                     int count = 0;
                     int begin;
                     int end;
@@ -75,11 +76,12 @@ namespace TJ.Systems.JobTypes
                             entryIndex = nextPtrs[entryIndex];
                         }
 
-                        if (!lastKey.Equals(currentKey))
+                        if (firstKey || !lastKey.Equals(currentKey))
                         {
                             producer.JobData.Execute(currentKey, valueArray, count);
                             currentKey = lastKey;
                             count = 0;
+                            firstKey = false;
                         }
                     }
                 }
