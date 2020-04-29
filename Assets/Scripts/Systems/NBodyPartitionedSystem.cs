@@ -80,7 +80,6 @@ namespace TJ.Systems
             public void Execute(int index)
             {
                 float totalMass = 0f;
-                int counted = 0;
                 var bucket = Buckets[index];
                 if (!bucket.Allocated)
                     return;
@@ -91,11 +90,10 @@ namespace TJ.Systems
                     if (!DestroyedEntities[jIdx])
                     {
                         totalMass += MassCopies[jIdx];
-                        ++counted;
                     }
                 }
 
-                bucket.Mass = totalMass / counted;
+                bucket.Mass = totalMass;
                 Buckets[index] = bucket;
             }
         }
