@@ -78,8 +78,8 @@ namespace TJ.Materials
             });
             var position = new PositionComponent {Value = initialposition};
             EntityManager.SetComponentData(entity, position);
-            //EntityManager.SetComponentData(entity, new VelocityComponent { Value = (float3)math.normalize(position.Value)*5f });
-            EntityManager.SetComponentData(entity, new VelocityComponent { Value = float3.zero });
+            EntityManager.SetComponentData(entity, new VelocityComponent { Value = (float3)math.normalize(position.Value)*5f });
+            //EntityManager.SetComponentData(entity, new VelocityComponent { Value = float3.zero });
             EntityManager.SetComponentData(entity, new MassComponent { Value = mass });
         }
     }

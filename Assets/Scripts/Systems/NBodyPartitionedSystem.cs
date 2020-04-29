@@ -1,46 +1,47 @@
-﻿using System;
-using System.Text;
-using TJ.Camera;
+﻿using TJ.Camera;
 using TJ.Components;
-using TJ.Systems.JobTypes;
-using TJ.Utility;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 using Unity.Transforms;
-using UnityEngine;
 
 namespace TJ.Systems
 {
     [UpdateInGroup(typeof(SimulationSystemGroup))]
     public class NBodyPartitionedSystem : JobComponentSystem
     {
-        private const int CollisionBucket = 0;
-        private const int NBodyBucket = 1;
+        private const int BucketSizes = 0;
         
         [BurstCompile]
-        struct CollisionJob : IJobNativeMultiHashMapVisitKeyAllValues<int3, int>
+        struct CollisionJob : IJobParallelFor
         {
             public EntityCommandBuffer.Concurrent CommandBuffer;
-            public NativeArray<bool> DestroyedEntities;
-            public NativeArray<float> MassCopies;
-            [ReadOnly] public NativeArray<double3> PositionCopies;
-            [ReadOnly] public NativeArray<float> ScaleCopies;
-            [ReadOnly] public NativeArray<Entity> Entities;
+            
+            [NativeDisableParallelForRestriction] public NativeArray<bool> DestroyedEntities;
+            [NativeDisableParallelForRestriction] public NativeArray<float> MassCopies;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<double3> PositionCopies;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<float> ScaleCopies;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<Entity> Entities;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<int> BucketIndices;
+            [ReadOnly] public NativeArray<Bucket> Buckets;
 
-            public void Execute(int3 key, NativeArray<int> scratchValues, int count)
+            public void Execute(int index)
             {
-                for (int j = 0; j < count; ++j)
+                var bucket = Buckets[index];
+                if (!bucket.Allocated)
+                    return;
+                
+                for (int j = 0; j < bucket.Count; ++j)
                 {
-                    var jIdx = scratchValues[j];
+                    var jIdx = BucketIndices[bucket.Offset+j];
                     var myPosition = PositionCopies[jIdx];
                     if (!DestroyedEntities[jIdx])
                     {
-                        for (int i = 0; i < count; ++i)
+                        for (int i = 0; i < bucket.Count; ++i)
                         {
-                            var iIdx = scratchValues[i];
+                            var iIdx = BucketIndices[bucket.Offset+i];
                             if (i != j && !DestroyedEntities[iIdx])
                             {
                                 var theirPosition = PositionCopies[iIdx];
@@ -69,18 +70,24 @@ namespace TJ.Systems
         }
         
         [BurstCompile]
-        struct PartitionAverageMasses : IJobNativeMultiHashMapVisitKeyAllValues<int3, int>
+        struct PartitionAverageMasses : IJobParallelFor
         {
-            [ReadOnly] public NativeArray<bool> DestroyedEntities;
-            [ReadOnly] public NativeArray<float> MassCopies;
-
-            public void Execute(int3 key, NativeArray<int> scratchValues, int count)
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<bool> DestroyedEntities;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<float> MassCopies;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<int> BucketIndices;
+            public NativeArray<Bucket> Buckets;
+            
+            public void Execute(int index)
             {
                 float totalMass = 0f;
                 int counted = 0;
-                for (int j = 0; j < count; ++j)
+                var bucket = Buckets[index];
+                if (!bucket.Allocated)
+                    return;
+                
+                for (int j = 0; j < bucket.Count; ++j)
                 {
-                    var jIdx = scratchValues[j];
+                    var jIdx = BucketIndices[bucket.Offset+j];
                     if (!DestroyedEntities[jIdx])
                     {
                         totalMass += MassCopies[jIdx];
@@ -88,51 +95,60 @@ namespace TJ.Systems
                     }
                 }
 
-/*                var numEntities = PositionCopies.Length;
-                for (int i = 0; i < numEntities; ++i)
-                {
-                    var myPosition = PositionCopies[i];
-                    var myGrid = (int3) math.floor(myPosition / NBodyBucketSize);
-                    if (!(myGrid.Equals(theirGrid)))
-                    {
-                        var myMass = MassCopies[i];
-                        var delta = theirPosition - myPosition;
-                        var distSq = math.distancesq(myPosition, theirPosition);
-                        var f = (myMass * theirMass) / (distSq + 10f);
-                        ForceCopies[i] += (float3) (f * delta / math.sqrt(distSq)); // TODO: get rid of sqrt?
-                    }
-                } */
+                bucket.Mass = totalMass / counted;
+                Buckets[index] = bucket;
             }
         }
 
         [BurstCompile]
-        struct ApplyGriddedNBodyForces : IJobNativeMultiHashMapVisitKeyAllValues<int3, int>
+        struct ApplyGriddedNBodyForces : IJobParallelFor
         {
-            [ReadOnly] public NativeArray<bool> DestroyedEntities;
-            [ReadOnly] public NativeArray<float> MassCopies;
-            [ReadOnly] public NativeArray<double3> PositionCopies;
-            public NativeArray<float3> Forces;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<bool> DestroyedEntities;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<float> MassCopies;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<double3> PositionCopies;
+            [NativeDisableParallelForRestriction] public NativeArray<float3> Forces;
+            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<int> BucketIndices;
+            [ReadOnly] public NativeArray<Bucket> Buckets;
 
-            public void Execute(int3 key, NativeArray<int> scratchValues, int count)
+            public void Execute(int index)
             {
-                for (int j = 0; j < count; ++j)
+                var bucket = Buckets[index];
+                if (!bucket.Allocated)
+                    return;
+                for (int j = 0; j < bucket.Count; ++j)
                 {
-                    var jIdx = scratchValues[j];
+                    var jIdx = BucketIndices[bucket.Offset+j];
                     var myPosition = PositionCopies[jIdx];
+                    var myMass = MassCopies[jIdx];
                     if (!DestroyedEntities[jIdx])
                     {
-                        for (int i = 0; i < count; ++i)
+                        // N^2 particles in this bucket for accuracy
+                        for (int i = 0; i < bucket.Count; ++i)
                         {
-                            var iIdx = scratchValues[i];
+                            var iIdx = BucketIndices[bucket.Offset+i];
                             if (i != j && !DestroyedEntities[iIdx])
                             {
                                 var theirPosition = PositionCopies[iIdx];
                                 var theirMass = MassCopies[iIdx];
-                                var myMass = MassCopies[jIdx];
                                 var delta = theirPosition - myPosition;
                                 var distSq = math.distancesq(myPosition, theirPosition);
                                 var f = (myMass * theirMass) / (distSq + 10f);
                                 Forces[jIdx] += (float3)(f * delta / math.sqrt(distSq)); // TODO: get rid of sqrt?
+                            }
+                        }
+
+                        // Apply average masses for other buckets at the bucket CoM
+                        for (int k = 0; k < Buckets.Length; ++k)
+                        {
+                            var otherBucket = Buckets[k];
+                            if (otherBucket.Allocated && !otherBucket.Grid.Equals(bucket.Grid))
+                            {
+                                var theirPosition = otherBucket.CenterOfMass;
+                                var theirMass = otherBucket.Mass;
+                                var delta = theirPosition - myPosition;
+                                var distSq = math.distancesq(myPosition, theirPosition);
+                                var f = (myMass * theirMass) / (distSq + 10f);
+                                Forces[jIdx] += (float3) (f * delta / math.sqrt(distSq)); // TODO: get rid of sqrt?
                             }
                         }
                     }
@@ -143,6 +159,16 @@ namespace TJ.Systems
         private EntityQuery m_EntityQuery;
         private EndSimulationEntityCommandBufferSystem m_EndSimulationEntityCommandBufferSystem;
 
+        public struct Bucket
+        {
+            public int3 Grid;
+            public double3 CenterOfMass;
+            public float Mass;
+            public int Offset;
+            public int Count;
+            public bool Allocated;
+        }
+        
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
             float dt = UnityEngine.Time.deltaTime;
@@ -155,15 +181,32 @@ namespace TJ.Systems
             var massCopies = new NativeArray<float>(allEntities.Length, Allocator.TempJob);
             var forceCopies = new NativeArray<float3>(allEntities.Length, Allocator.TempJob);
             var positionCopies = new NativeArray<double3>(allEntities.Length, Allocator.TempJob);
-            var collisionPartitions = new NativeMultiHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
-            var nBodyPartitions = new NativeMultiHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
+            
+
+            const int NumBuckets = 200;
+            const int IndexPerBucket = 200;
+            
+            var gridToBucketIndex = new NativeHashMap<int3, int>(allEntities.Length, Allocator.TempJob);
+            var bucketIndices = new NativeArray<int>(NumBuckets * IndexPerBucket, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            var buckets = new NativeArray<Bucket>(NumBuckets, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            for (int i = 0; i < NumBuckets; ++i)
+            {
+                var buffer = buckets[i];
+                buffer.Count = 0;
+                buffer.Offset = i * IndexPerBucket;
+                buffer.Grid = int3.zero;
+                buffer.Allocated = false;
+                buffer.CenterOfMass = double3.zero;
+                buffer.Mass = 0f;
+                buckets[i] = buffer;
+            }
+
             var partitionSizes = new NativeArray<int>(2, Allocator.TempJob);
            
             var copyMassScaleTranslationJob = Entities.ForEach((Entity e, int entityInQueryIndex, in MassComponent myMass, in ForceComponent myForce, in Scale myScale, in PositionComponent myPosition) =>
             {
                 scaleCopies[entityInQueryIndex] = myScale.Value;
                 massCopies[entityInQueryIndex] = myMass.Value;
-                forceCopies[entityInQueryIndex] = myForce.Value;
                 positionCopies[entityInQueryIndex] = myPosition.Value;
             }).WithName("CopyMassScaleTranslation").Schedule(inputDeps);
 
@@ -179,21 +222,52 @@ namespace TJ.Systems
                 }
 
                 var distance = math.distance(min, max);
-                partitionSizes[CollisionBucket] = (int)distance / 10;
-                partitionSizes[NBodyBucket] = (int)distance / 3;
+                partitionSizes[BucketSizes] = (int)distance / 8;
             }).WithName("CalculateMinMaxBounds").WithBurst().Schedule(copyMassScaleTranslationJob);
 
-            var parallelCollisionPartitionWriter = collisionPartitions.AsParallelWriter();
-            var parallelnBodyPartitionsPartitionWriter = nBodyPartitions.AsParallelWriter();
-            var determinePartitionsJob = Entities.ForEach((Entity e, int entityInQueryIndex, in PositionComponent myPosition) =>
-            {
-                var pos = myPosition.Value;
-                parallelCollisionPartitionWriter.Add((int3)math.floor(pos / partitionSizes[CollisionBucket]), entityInQueryIndex);
-                parallelnBodyPartitionsPartitionWriter.Add((int3)math.floor(pos / partitionSizes[NBodyBucket]), entityInQueryIndex);
-            }).WithName("DeterminePartitions").Schedule(calculatePartitionSizesJob);
+            var determinePartitionsJob = Job.WithCode(() =>
+                {
+                    var partitionSize = partitionSizes[BucketSizes];
+                    
+                    double3 halfPartitionSize = default;
+                    halfPartitionSize.xyz = partitionSize * 0.5;
+                    
+                    var nextBucket = 0;
+                    
+                    for (int i = 0; i < positionCopies.Length; ++i)
+                    {
+                        Bucket bucket;
+                        var grid = (int3) math.floor(positionCopies[i] / partitionSize);
+                        var bucketIndex = 0;
+                        
+                        if (!gridToBucketIndex.ContainsKey(grid))
+                        {
+                            bucketIndex = nextBucket;
+                            gridToBucketIndex.Add(grid, bucketIndex);
+                            ++nextBucket;
+                            
+                            bucket = buckets[bucketIndex];
+                            bucket.Allocated = true;
+                            bucket.Count = 0;
+                            bucket.Grid = grid;
+                            bucket.CenterOfMass = (bucket.Grid * partitionSize) + halfPartitionSize; // TODO: Check this is correct........ 
+                            buckets[bucketIndex] = bucket;
+                        }
+                        else
+                        {
+                            bucketIndex = gridToBucketIndex[grid];
+                        }
+                        
+                        bucket = buckets[bucketIndex];
+                        bucketIndices[bucket.Offset + bucket.Count] = i;
+                        bucket.Count++;
+                        buckets[bucketIndex] = bucket;
+                    }
+                }).WithBurst().WithName("PerformPartition")
+                .Schedule(calculatePartitionSizesJob);
+            
+            var partitioningAndCopyingCompleteBarrier = determinePartitionsJob;
 
-            var initalSteps = determinePartitionsJob;
-                
             var processCollisionsNSquaredJob = new CollisionJob
             {
                 CommandBuffer = commandBuffer,
@@ -202,33 +276,34 @@ namespace TJ.Systems
                 MassCopies = massCopies,
                 PositionCopies = positionCopies,
                 ScaleCopies = scaleCopies,
-            }.Schedule(collisionPartitions, 1, initalSteps);
+                Buckets = buckets,
+                BucketIndices = bucketIndices
+            }.Schedule(buckets.Length, 0, partitioningAndCopyingCompleteBarrier);
             m_EndSimulationEntityCommandBufferSystem.AddJobHandleForProducer(processCollisionsNSquaredJob);
 
-            var zeroForces = Entities.
-                ForEach((ref ForceComponent force) => { force.Value = float3.zero; })
-                .WithName("ZeroForces")
-                .WithBurst()
-                .Schedule(inputDeps);
-
-            var waitZeroAndCollisionJobs = JobHandle.CombineDependencies(zeroForces, processCollisionsNSquaredJob);
-
-            var calculatePartitionMasses = new PartitionAverageMasses
+            var calculatePartitionMassesJob = new PartitionAverageMasses
             {
-                DestroyedEntities = destroyedEntities, 
-                MassCopies = massCopies
-            }.Schedule(nBodyPartitions, 
-                1, waitZeroAndCollisionJobs);
+                DestroyedEntities = destroyedEntities,
+                MassCopies = massCopies,
+                Buckets = buckets,
+                BucketIndices = bucketIndices
+            }.Schedule(buckets.Length, 0, processCollisionsNSquaredJob);
+
+            var massesAndCollisionsCompleteBarrier = calculatePartitionMassesJob;
             
             var aggregateForcesNSquaredJob = new ApplyGriddedNBodyForces
             {
                 DestroyedEntities = destroyedEntities,
                 MassCopies = massCopies,
                 PositionCopies = positionCopies,
-                Forces = forceCopies
-            }.Schedule(nBodyPartitions, 1, calculatePartitionMasses);
+                Forces = forceCopies,
+                Buckets = buckets,
+                BucketIndices = bucketIndices
+            }.Schedule(buckets.Length, 0, massesAndCollisionsCompleteBarrier);
+
+            var allPhysicsJobsCompleteBarrier = aggregateForcesNSquaredJob;
             
-            var updateScaleFromMassJob = Entities.
+            var updateScaleMassForceJob = Entities.
                 ForEach((Entity e, int entityInQueryIndex, ref Scale scale, ref MassComponent myMass, ref ForceComponent myForce) =>
                 {
                     myForce.Value = forceCopies[entityInQueryIndex];
@@ -240,7 +315,7 @@ namespace TJ.Systems
                 .WithReadOnly(massCopies)
                 .WithReadOnly(forceCopies)
                 .WithBurst()
-                .Schedule(aggregateForcesNSquaredJob);
+                .Schedule(allPhysicsJobsCompleteBarrier);
 
             var cameraLookAt = CameraController.Instance.Data.LookAtPosition;
             var simulateJob = Entities.
@@ -255,18 +330,20 @@ namespace TJ.Systems
                     translation.Value = (float3)(position.Value - cameraLookAt);
                 })
                 .WithBurst()
-                .Schedule(aggregateForcesNSquaredJob);
+                .Schedule(updateScaleMassForceJob);
 
-            var disposalJob = allEntities.Dispose(JobHandle.CombineDependencies(updateScaleFromMassJob, aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, destroyedEntities.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, scaleCopies.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, massCopies.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, forceCopies.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, positionCopies.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, collisionPartitions.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, nBodyPartitions.Dispose(aggregateForcesNSquaredJob));
-            disposalJob = JobHandle.CombineDependencies(disposalJob, partitionSizes.Dispose(aggregateForcesNSquaredJob));
-            return JobHandle.CombineDependencies(disposalJob, simulateJob);
+
+            var disposalJob = allEntities.Dispose(simulateJob);
+            disposalJob = JobHandle.CombineDependencies(disposalJob, destroyedEntities.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, scaleCopies.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, massCopies.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, forceCopies.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, positionCopies.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, partitionSizes.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, bucketIndices.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, buckets.Dispose(simulateJob));
+            disposalJob = JobHandle.CombineDependencies(disposalJob, gridToBucketIndex.Dispose(simulateJob));
+            return disposalJob;
         }
 
         protected override void OnCreate()
