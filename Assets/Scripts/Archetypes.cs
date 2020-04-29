@@ -23,6 +23,8 @@ namespace TJ
                 typeof(BuiltinMaterialPropertyUnity_RenderingLayer),
                 typeof(BuiltinMaterialPropertyUnity_WorldTransformParams),
                 typeof(BuiltinMaterialPropertyUnity_LightData),
+                typeof(WorldToLocal_Tag),
+                typeof(PerInstanceCullingTag),
                 typeof(Scale),
                 typeof(Translation),
                 typeof(RenderBounds),
