@@ -15,7 +15,6 @@ namespace TJ.Systems
         private EndSimulationEntityCommandBufferSystem m_EndSimulationEntityCommandBufferSystem;
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
-            return inputDeps;
             float dt = UnityEngine.Time.deltaTime;
 
             var commandBuffer = m_EndSimulationEntityCommandBufferSystem.CreateCommandBuffer().ToConcurrent();
