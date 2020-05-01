@@ -29,6 +29,9 @@ namespace TJ.Camera
             data.Distance -= (data.ZoomVelocity) * input.SecondaryAxis.x;
             data.Distance = math.clamp(data.Distance, data.MinMaxDistance.x, data.MinMaxDistance.y);
             data.EyePosition = data.LookAtPosition + (data.Distance * -data.Forward);
+
+            var rotation = quaternion.RotateY(dt * -math.PI * 0.025f);
+            data.Forward = math.rotate(rotation, data.Forward); 
             return NextState;
         }
 

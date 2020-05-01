@@ -1,5 +1,6 @@
 ﻿using System;
 using TJ.Components;
+using TJ.Systems;
 using TJ.Utility;
 using Unity.Collections;
 using Unity.Entities;
@@ -13,6 +14,7 @@ namespace TJ.Materials
     {
         public Material Material;
         public Mesh Mesh;
+        public bool SystemsPaused;
         public RenderMesh RenderMesh { get; private set; }
         public AABB Bounds { get; private set; }
         
@@ -21,8 +23,19 @@ namespace TJ.Materials
             return this;
         }
 
+        private void Update()
+        {
+            if (UnityEngine.Input.GetKeyUp(KeyCode.P))
+            {
+                SystemsPaused = !SystemsPaused;
+                World.DefaultGameObjectInjectionWorld.GetExistingSystem<NBodyPartitionedSystem>().Enabled = SystemsPaused;
+            }
+        }
+
         protected override void SingletonAwake()
         {
+            SystemsPaused = true;
+            
             RenderMesh = new RenderMesh
             {
                 mesh = Mesh,
@@ -32,7 +45,7 @@ namespace TJ.Materials
 
             var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
             
-            const int NumberOfBodies = 10000;
+            const int NumberOfBodies = 100000;
             var random = new Unity.Mathematics.Random(UInt32.MaxValue);
             var entities = entityManager.CreateEntity(Archetypes.BaseBodyArchetype, NumberOfBodies, Allocator.Temp);
             for (int i = 0; i < entities.Length; ++i)
